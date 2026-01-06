@@ -9,7 +9,7 @@ if (!isset($_SESSION['user_id'])) {
 
 include 'database.php';
 
-/* ===== SAFE HELPERS ===== */
+/* ===== SAFE HELPERS X===== */
 function fetch_one_assoc(mysqli $conn, string $sql): array {
     $res = mysqli_query($conn, $sql);
     if (!$res) return [];

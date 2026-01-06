@@ -33,8 +33,10 @@ $total_quantity = (int) (fetch_one_assoc($conn, "SELECT COALESCE(SUM(quantity),0
 $total_borrowed = (int) (fetch_one_assoc($conn, "
     SELECT COUNT(*) AS total
     FROM borrow_transactions
-    WHERE status='borrowed'
+    WHERE status = 'borrowed'
+      AND user_id = " . (int)$_SESSION['user_id'] . "
 ")['total'] ?? 0);
+
 
 /* 🔒 LOW STOCK (ADMIN ONLY) */
 $low_stock = 0;
