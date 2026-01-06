@@ -1,0 +1,164 @@
+<?php
+session_start();
+
+/* ===== LOGIN CHECK ===== */
+if (!isset($_SESSION['user_id'])) {
+    header("Location: ../../auth/login.php");
+    exit;
+}
+
+/* ===== ADMIN ONLY ===== */
+if (($_SESSION['role'] ?? '') !== 'admin') {
+    header("Location: ../../index.php");
+    exit;
+}
+
+include '../../database.php';
+
+/* =========================
+   APPROVE / REJECT USER
+========================= */
+if (isset($_GET['action'], $_GET['id']) && ctype_digit($_GET['id'])) {
+
+    $user_id = (int) $_GET['id'];
+    $action  = $_GET['action'];
+
+    if ($action === 'approve') {
+        $stmt = $conn->prepare("UPDATE users SET status='active' WHERE user_id=?");
+        $stmt->bind_param("i", $user_id);
+        $stmt->execute();
+        $stmt->close();
+    } elseif ($action === 'reject') {
+        $stmt = $conn->prepare("UPDATE users SET status='rejected' WHERE user_id=?");
+        $stmt->bind_param("i", $user_id);
+        $stmt->execute();
+        $stmt->close();
+    }
+
+    header("Location: list.php");
+    exit;
+}
+
+/* =========================
+   UPDATE DEPARTMENT (ACTIVE STAFF ONLY)
+========================= */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_department'])) {
+
+    $uid  = (int) $_POST['user_id'];
+    $dept = trim($_POST['department']);
+
+    $check = $conn->prepare("SELECT role, status FROM users WHERE user_id=?");
+    $check->bind_param("i", $uid);
+    $check->execute();
+    $check->bind_result($role, $status);
+    $check->fetch();
+    $check->close();
+
+    if (strtolower($role) === 'staff' && strtolower($status) === 'active') {
+        $stmt = $conn->prepare("UPDATE users SET department=? WHERE user_id=?");
+        $stmt->bind_param("si", $dept, $uid);
+        $stmt->execute();
+        $stmt->close();
+    }
+
+    header("Location: list.php");
+    exit;
+}
+
+/* ===== FETCH USERS ===== */
+$users = mysqli_query($conn, "
+    SELECT user_id, username, role, department, status, created_at
+    FROM users
+    ORDER BY created_at DESC
+");
+
+/* ===== DEPARTMENTS ===== */
+$departments = ['Operations','Network','NOC','Finance','HR','Management'];
+?>
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>User List</title>
+  <link rel="stylesheet" href="../../admin/dist/css/adminlte.min.css">
+</head>
+
+<body>
+<div class="container-fluid mt-4">
+
+<table class="table table-bordered table-striped">
+<thead>
+<tr>
+  <th>ID</th>
+  <th>Username</th>
+  <th>Role</th>
+  <th>Department</th>
+  <th>Status</th>
+  <th>Created</th>
+</tr>
+</thead>
+<tbody>
+
+<?php while ($u = mysqli_fetch_assoc($users)): ?>
+<tr>
+
+<td><?= $u['user_id'] ?></td>
+<td><?= htmlspecialchars($u['username']) ?></td>
+<td><?= ucfirst($u['role']) ?></td>
+
+<!-- 🔥 DEPARTMENT FIX -->
+<td>
+<?php if ($u['role'] !== 'staff'): ?>
+
+  <span class="text-muted">—</span>
+
+<?php elseif ($u['status'] === 'rejected'): ?>
+
+  <span class="text-muted">—</span>
+
+<?php elseif ($u['status'] === 'active'): ?>
+
+  <strong><?= htmlspecialchars($u['department']) ?></strong>
+
+  <form method="post" class="mt-1">
+    <input type="hidden" name="user_id" value="<?= $u['user_id'] ?>">
+    <select name="department" class="form-control form-control-sm">
+      <?php foreach ($departments as $d): ?>
+        <option <?= $u['department']===$d?'selected':'' ?>><?= $d ?></option>
+      <?php endforeach ?>
+    </select>
+    <button name="set_department" class="btn btn-sm btn-primary mt-1">Save</button>
+  </form>
+
+<?php else: ?>
+
+  <!-- 🔥 PENDING STAFF → SHOW TEXT ONLY -->
+  <strong><?= htmlspecialchars($u['department']) ?></strong>
+
+<?php endif; ?>
+</td>
+
+<td>
+<?php if ($u['status']==='pending'): ?>
+  Pending<br>
+  <a href="?action=approve&id=<?= $u['user_id'] ?>" class="btn btn-sm btn-success">Approve</a>
+  <a href="?action=reject&id=<?= $u['user_id'] ?>" class="btn btn-sm btn-danger">Reject</a>
+<?php elseif ($u['status']==='active'): ?>
+  Active
+<?php else: ?>
+  Rejected
+<?php endif; ?>
+</td>
+
+<td><?= $u['created_at'] ?></td>
+
+</tr>
+<?php endwhile; ?>
+
+</tbody>
+</table>
+
+</div>
+</body>
+</html>

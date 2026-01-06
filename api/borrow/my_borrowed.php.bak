@@ -1,0 +1,31 @@
+<?php
+header("Content-Type: application/json");
+include '../../database.php';
+
+$user_id = (int)($_GET['user_id'] ?? 0);
+
+if ($user_id <= 0) {
+    http_response_code(400);
+    echo json_encode(["error" => "Invalid user"]);
+    exit;
+}
+
+$stmt = $conn->prepare("
+    SELECT b.borrow_id, b.borrow_date, b.status,
+           i.item_name
+    FROM borrow_transactions b
+    JOIN items i ON i.item_id = b.item_id
+    WHERE b.user_id = ?
+    ORDER BY b.borrow_date DESC
+");
+
+$stmt->bind_param("i", $user_id);
+$stmt->execute();
+
+$data = [];
+$res = $stmt->get_result();
+while ($row = $res->fetch_assoc()) {
+    $data[] = $row;
+}
+
+echo json_encode($data);

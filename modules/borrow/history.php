@@ -1,0 +1,139 @@
+<?php
+session_start();
+
+/* ===== LOGIN CHECK ===== */
+if (!isset($_SESSION['user_id'])) {
+    header("Location: ../../auth/login.php");
+    exit;
+}
+
+include '../../database.php';
+
+/* ===== SHOW BACK BUTTON ===== */
+$showBackButton = true;
+
+/* ===== LAYOUT TOP (HEADER + SIDEBAR) ===== */
+include '../../partials/layout_top.php';
+
+$user_id = (int) $_SESSION['user_id'];
+
+/* ===== FETCH BORROW HISTORY (CURRENT USER) ===== */
+$stmt = $conn->prepare("
+    SELECT 
+        b.borrow_id,
+        b.quantity,
+        b.borrow_date,
+        b.return_date,
+        b.status,
+        i.item_name,
+        i.model,
+        i.serial_number
+    FROM borrow_transactions b
+    JOIN items i ON b.item_id = i.item_id
+    WHERE b.user_id = ?
+    ORDER BY b.borrow_date DESC
+");
+
+if (!$stmt) {
+    die('Query prepare failed: ' . $conn->error);
+}
+
+$stmt->bind_param("i", $user_id);
+$stmt->execute();
+$result = $stmt->get_result();
+?>
+
+<!-- ================= PAGE HEADER ================= -->
+<section class="content-header">
+  <h1 class="mb-2">Borrow History</h1>
+  <p class="text-muted mb-0">
+    Complete record of all your borrow transactions.
+  </p>
+</section>
+
+<!-- ================= PAGE CONTENT ================= -->
+<section class="content">
+
+  <div class="card">
+    <div class="card-body table-responsive">
+
+      <table class="table table-bordered table-striped align-middle">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Item</th>
+            <th>Model</th>
+            <th>Serial No</th>
+            <th>Quantity</th>
+            <th>Borrow Date</th>
+            <th>Return Date</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+
+        <tbody>
+        <?php if ($result->num_rows > 0): ?>
+          <?php $no = 1; while ($row = $result->fetch_assoc()): ?>
+            <tr>
+              <td><?= $no++ ?></td>
+              <td><?= htmlspecialchars($row['item_name']) ?></td>
+              <td><?= $row['model'] ? htmlspecialchars($row['model']) : '-' ?></td>
+              <td><?= $row['serial_number'] ? htmlspecialchars($row['serial_number']) : '-' ?></td>
+              <td><?= (int)$row['quantity'] ?></td>
+              <td><?= date('d M Y', strtotime($row['borrow_date'])) ?></td>
+              <td>
+                <?= $row['return_date']
+                    ? date('d M Y', strtotime($row['return_date']))
+                    : '-' ?>
+              </td>
+
+              <!-- STATUS (BLACK TEXT STANDARDIZED) -->
+              <td>
+                <?php
+                  switch ($row['status']) {
+                    case 'pending':
+                      echo '<span class="badge badge-secondary text-dark">Pending Approval</span>';
+                      break;
+                    case 'borrowed':
+                      echo '<span class="badge badge-warning text-dark">Borrowed</span>';
+                      break;
+                    case 'returned':
+                      echo '<span class="badge badge-success text-dark">Returned</span>';
+                      break;
+                    case 'rejected':
+                      echo '<span class="badge badge-danger text-dark">Borrow Rejected</span>';
+                      break;
+                    case 'return_requested':
+                      echo '<span class="badge badge-info text-dark">Return Pending</span>';
+                      break;
+                    case 'return_rejected':
+                      echo '<span class="badge badge-danger text-dark">Return Rejected</span>';
+                      break;
+                    default:
+                      echo '<span class="badge badge-light text-dark">Unknown</span>';
+                  }
+                ?>
+              </td>
+            </tr>
+          <?php endwhile; ?>
+        <?php else: ?>
+          <tr>
+            <td colspan="8" class="text-center text-muted">
+              No borrow history found
+            </td>
+          </tr>
+        <?php endif; ?>
+        </tbody>
+
+      </table>
+
+    </div>
+  </div>
+
+</section>
+
+<?php
+$stmt->close();
+/* ===== LAYOUT BOTTOM ===== */
+include '../../partials/layout_bottom.php';
+?>

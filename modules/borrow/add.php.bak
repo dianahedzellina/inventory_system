@@ -1,0 +1,243 @@
+<?php
+session_start();
+
+/* ===== LOGIN CHECK ===== */
+if (!isset($_SESSION['user_id'])) {
+    header("Location: ../../auth/login.php");
+    exit;
+}
+
+include '../../database.php';
+
+/* ===== PAGE SETTINGS ===== */
+$showBackButton = true;
+include '../../partials/layout_top.php';
+
+$user_id = (int) $_SESSION['user_id'];
+$message = "";
+
+/* ===== HANDLE SUBMIT ===== */
+if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_POST['borrow_submit'])) {
+
+    $item_id = (int) $_POST['item_id'];
+    $qty     = (int) $_POST['quantity'];
+    $reason  = trim($_POST['reason']);
+
+    if ($item_id <= 0 || $qty <= 0 || $reason === "") {
+        $message = "All fields are required ❌";
+    } else {
+
+        $check = $conn->prepare("
+            SELECT quantity FROM items WHERE item_id = ? LIMIT 1
+        ");
+        $check->bind_param("i", $item_id);
+        $check->execute();
+        $res = $check->get_result();
+        $item = $res->fetch_assoc();
+        $check->close();
+
+        if (!$item) {
+            $message = "Invalid item selected ❌";
+        } elseif ($qty > (int)$item['quantity']) {
+            $message = "Requested quantity exceeds available stock ❌";
+        } else {
+
+            $stmt = $conn->prepare("
+                INSERT INTO borrow_transactions
+                (user_id, item_id, quantity, request_reason, status, borrow_date)
+                VALUES (?, ?, ?, ?, 'pending', NOW())
+            ");
+            $stmt->bind_param("iiis", $user_id, $item_id, $qty, $reason);
+            $stmt->execute();
+            $stmt->close();
+
+            $message = "Borrow request submitted successfully. Awaiting admin approval ✅";
+        }
+    }
+}
+
+/* ===== FETCH ITEM GROUPS ===== */
+$groups = $conn->query("
+    SELECT DISTINCT item_name
+    FROM items
+    WHERE quantity > 0
+    ORDER BY item_name ASC
+");
+
+/* ===== FETCH ALL AVAILABLE ITEMS ===== */
+$items = $conn->query("
+    SELECT item_id, item_name, model, serial_number, quantity
+    FROM items
+    WHERE quantity > 0
+    ORDER BY item_name, model
+");
+?>
+
+<section class="content-header">
+  <h1 class="mb-1">Borrow Inventory</h1>
+  <p class="text-muted mb-0">
+    Select item type, then choose the asset to borrow
+  </p>
+</section>
+
+<section class="content">
+
+<?php if ($message): ?>
+  <div class="alert alert-info"><?= htmlspecialchars($message) ?></div>
+<?php endif; ?>
+
+<div class="card">
+  <div class="card-body">
+
+    <!-- ITEM TYPE FILTER -->
+    <div class="form-group">
+      <label><strong>Item Type</strong></label>
+      <select id="itemFilter" class="form-control">
+        <option value="">— All Items —</option>
+        <?php while ($g = $groups->fetch_assoc()): ?>
+          <option value="<?= htmlspecialchars($g['item_name']) ?>">
+            <?= htmlspecialchars($g['item_name']) ?>
+          </option>
+        <?php endwhile; ?>
+      </select>
+    </div>
+
+    <!-- ITEMS TABLE -->
+    <div class="table-responsive">
+      <table class="table table-bordered table-striped" id="itemsTable">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Item</th>
+            <th>Model</th>
+            <th>Serial No.</th>
+            <th>Available</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody>
+
+        <?php $no = 1; while ($row = $items->fetch_assoc()): ?>
+          <tr data-item="<?= htmlspecialchars($row['item_name']) ?>">
+
+            <td><?= $no++ ?></td>
+
+            <td><strong><?= htmlspecialchars($row['item_name']) ?></strong></td>
+
+            <td><?= $row['model'] ? htmlspecialchars($row['model']) : '—' ?></td>
+
+            <td><?= $row['serial_number'] ? htmlspecialchars($row['serial_number']) : '—' ?></td>
+
+            <td>
+              <span class="badge badge-info">
+                <?= (int)$row['quantity'] ?>
+              </span>
+            </td>
+
+            <td>
+              <button class="btn btn-sm btn-primary"
+                      data-toggle="modal"
+                      data-target="#borrowModal"
+                      data-id="<?= (int)$row['item_id'] ?>"
+                      data-name="<?= htmlspecialchars($row['item_name'].' - '.$row['model']) ?>"
+                      data-stock="<?= (int)$row['quantity'] ?>">
+                <i class="fas fa-hand-holding"></i> Borrow
+              </button>
+            </td>
+
+          </tr>
+        <?php endwhile; ?>
+
+        </tbody>
+      </table>
+    </div>
+
+  </div>
+</div>
+
+</section>
+
+<!-- BORROW MODAL -->
+<div class="modal fade" id="borrowModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+
+      <form method="post">
+
+        <div class="modal-header">
+          <h5 class="modal-title">Borrow Item</h5>
+          <button type="button" class="close" data-dismiss="modal">
+            <span>&times;</span>
+          </button>
+        </div>
+
+        <div class="modal-body">
+
+          <input type="hidden" name="item_id" id="modalItemId">
+
+          <div class="form-group">
+            <label>Item</label>
+            <input type="text" id="modalItemName" class="form-control" readonly>
+          </div>
+
+          <div class="form-group">
+            <label>Quantity</label>
+            <input type="number"
+                   name="quantity"
+                   id="modalQty"
+                   class="form-control"
+                   min="1"
+                   required>
+            <small class="text-muted" id="modalStockInfo"></small>
+          </div>
+
+          <div class="form-group">
+            <label>Reason</label>
+            <textarea name="reason"
+                      class="form-control"
+                      rows="3"
+                      required></textarea>
+          </div>
+
+        </div>
+
+        <div class="modal-footer">
+          <button type="button"
+                  class="btn btn-secondary"
+                  data-dismiss="modal">
+            Cancel
+          </button>
+
+          <button type="submit"
+                  name="borrow_submit"
+                  class="btn btn-primary">
+            Submit Request
+          </button>
+        </div>
+
+      </form>
+
+    </div>
+  </div>
+</div>
+
+<?php include '../../partials/layout_bottom.php'; ?>
+
+<script>
+/* FILTER BY ITEM TYPE */
+document.getElementById('itemFilter').addEventListener('change', function () {
+  const value = this.value;
+  document.querySelectorAll('#itemsTable tbody tr').forEach(row => {
+    row.style.display = !value || row.dataset.item === value ? '' : 'none';
+  });
+});
+
+/* MODAL DATA */
+$('#borrowModal').on('show.bs.modal', function (event) {
+  const btn = $(event.relatedTarget);
+  $('#modalItemId').val(btn.data('id'));
+  $('#modalItemName').val(btn.data('name'));
+  $('#modalQty').attr('max', btn.data('stock'));
+  $('#modalStockInfo').text('Available stock: ' + btn.data('stock'));
+});
+</script>

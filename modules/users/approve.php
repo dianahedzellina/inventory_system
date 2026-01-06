@@ -1,0 +1,45 @@
+<?php
+session_start();
+
+/* ===== LOGIN CHECK ===== */
+if (!isset($_SESSION['user_id'])) {
+    header("Location: ../../auth/login.php");
+    exit;
+}
+
+/* ===== ADMIN ONLY ===== */
+if ($_SESSION['role'] !== 'admin') {
+    header("Location: ../../index.php");
+    exit;
+}
+
+include '../../database.php';
+
+/* ===== GET USER ID FROM URL ===== */
+$id = isset($_GET['id']) ? (int) $_GET['id'] : 0;
+
+if ($id <= 0) {
+    header("Location: list.php");
+    exit;
+}
+
+/* ===== APPROVE USER (SET ACTIVE) ===== */
+$stmt = $conn->prepare("UPDATE users SET status='active' WHERE user_id=?");
+$stmt->bind_param("i", $id);
+$stmt->execute();
+$stmt->close();
+// ===== ACTIVITY LOG =====
+$admin_id = $_SESSION['user_id'];
+
+$stmt = $conn->prepare(
+    "INSERT INTO activity_logs (user_id, action) VALUES (?, ?)"
+);
+$action = "Approved user ID: $id";
+$stmt->bind_param("is", $admin_id, $action);
+$stmt->execute();
+$stmt->close();
+
+
+/* ===== BACK TO LIST ===== */
+header("Location: list.php?approved=1");
+exit;

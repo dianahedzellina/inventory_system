@@ -1,0 +1,155 @@
+<?php
+session_start();
+
+/* ===== ADMIN CHECK ===== */
+if (!isset($_SESSION['user_id'])) {
+    header("Location: ../../auth/login.php");
+    exit;
+}
+
+if (($_SESSION['role'] ?? '') !== 'admin') {
+    header("Location: ../../index.php");
+    exit;
+}
+
+include '../../database.php';
+
+/* ===== SHOW BACK BUTTON ===== */
+$showBackButton = true;
+
+/* ===== LAYOUT TOP ===== */
+include '../../partials/layout_top.php';
+
+/* ===== FETCH PENDING BORROW REQUESTS ONLY ===== */
+$stmt = $conn->prepare("
+    SELECT 
+        b.borrow_id,
+        b.quantity,
+        b.request_reason,
+        b.borrow_date,
+
+        i.item_name,
+        i.model,
+        i.serial_number,
+        i.quantity AS available_stock,
+
+        u.username,
+        u.department
+
+    FROM borrow_transactions b
+    JOIN items i ON b.item_id = i.item_id
+    JOIN users u ON b.user_id = u.user_id
+    WHERE b.status = 'pending'
+    ORDER BY b.borrow_date ASC
+");
+
+$stmt->execute();
+$result = $stmt->get_result();
+?>
+
+<!-- ================= PAGE HEADER ================= -->
+<section class="content-header">
+  <h1 class="mb-2">Pending Borrow Requests</h1>
+  <p class="text-muted mb-0">
+    Requests waiting for admin approval. Approved or rejected requests are removed from this list.
+  </p>
+</section>
+
+<!-- ================= PAGE CONTENT ================= -->
+<section class="content">
+
+  <!-- ✅ IMPORTANT EXPLANATION (FIXES CONFUSION) -->
+  <div class="alert alert-info">
+    <i class="fas fa-info-circle"></i>
+    This page only shows <strong>pending</strong> borrow requests.
+    <br>
+    Approved or rejected requests are stored in the system and can be viewed in reports or user history.
+  </div>
+
+  <div class="card">
+    <div class="card-body table-responsive">
+
+      <table class="table table-bordered table-striped align-middle">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Requester</th>
+            <th>Department</th>
+            <th>Item</th>
+            <th>Model</th>
+            <th>Serial No</th>
+            <th>Requested Qty</th>
+            <th>Available</th>
+            <th>Staff Reason</th>
+            <th style="width:180px;">Action</th>
+          </tr>
+        </thead>
+
+        <tbody>
+        <?php if ($result->num_rows > 0): ?>
+          <?php $no = 1; while ($row = $result->fetch_assoc()): ?>
+            <tr>
+
+              <td><?= $no++ ?></td>
+
+              <td><strong><?= htmlspecialchars($row['username']) ?></strong></td>
+
+              <td>
+                <?= $row['department']
+                    ? '<span class="badge badge-info text-dark">'.htmlspecialchars($row['department']).'</span>'
+                    : '<span class="text-muted">Not Set</span>' ?>
+              </td>
+
+              <td><?= htmlspecialchars($row['item_name']) ?></td>
+
+              <td><?= $row['model'] ?: '<span class="text-muted">—</span>' ?></td>
+
+              <td><?= $row['serial_number'] ?: '<span class="text-muted">—</span>' ?></td>
+
+              <td><?= (int)$row['quantity'] ?></td>
+
+              <td>
+                <span class="badge badge-warning text-dark">
+                  <?= (int)$row['available_stock'] ?>
+                </span>
+              </td>
+
+              <td style="max-width:280px;">
+                <?= nl2br(htmlspecialchars($row['request_reason'])) ?>
+              </td>
+
+              <td>
+                <a href="/inventory_system/modules/borrow/approve_borrow.php?id=<?= $row['borrow_id'] ?>"
+                   class="btn btn-sm btn-success mb-1"
+                   onclick="return confirm('Approve this borrow request?');">
+                  <i class="fas fa-check"></i> Approve
+                </a>
+
+                <a href="/inventory_system/modules/borrow/reject_borrow.php?id=<?= $row['borrow_id'] ?>"
+                   class="btn btn-sm btn-danger">
+                  <i class="fas fa-times"></i> Reject
+                </a>
+              </td>
+
+            </tr>
+          <?php endwhile; ?>
+        <?php else: ?>
+          <tr>
+            <td colspan="10" class="text-center text-muted">
+              No pending borrow requests at the moment.
+            </td>
+          </tr>
+        <?php endif; ?>
+        </tbody>
+
+      </table>
+
+    </div>
+  </div>
+
+</section>
+
+<?php
+$stmt->close();
+include '../../partials/layout_bottom.php';
+?>

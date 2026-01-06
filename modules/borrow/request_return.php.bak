@@ -1,0 +1,76 @@
+<?php
+session_start();
+
+/* ===== LOGIN CHECK ===== */
+if (!isset($_SESSION['user_id'])) {
+    header("Location: ../../auth/login.php");
+    exit;
+}
+
+include '../../database.php';
+
+/* ===== GET IDENTIFIERS ===== */
+$user_id     = (int) $_SESSION['user_id'];
+$item_id     = isset($_GET['item_id']) ? (int) $_GET['item_id'] : 0;
+$borrow_date = $_GET['borrow_date'] ?? '';
+
+/* ===== BASIC VALIDATION ===== */
+if ($item_id <= 0 || $borrow_date === '') {
+    header("Location: list.php");
+    exit;
+}
+
+/* =========================================================
+   STEP 1: VERIFY THIS BORROW BELONGS TO USER
+           AND CAN REQUEST RETURN
+========================================================= */
+$stmt = $conn->prepare("
+    SELECT status
+    FROM borrow_transactions
+    WHERE user_id = ?
+      AND item_id = ?
+      AND borrow_date = ?
+      AND status IN ('borrowed', 'return_rejected')
+    LIMIT 1
+");
+$stmt->bind_param("iis", $user_id, $item_id, $borrow_date);
+$stmt->execute();
+$result = $stmt->get_result();
+$stmt->close();
+
+/* ===== IF NOT VALID, BLOCK ===== */
+if ($result->num_rows === 0) {
+    header("Location: list.php?requested=invalid");
+    exit;
+}
+
+/* =========================================================
+   STEP 2: UPDATE STATUS → return_requested
+========================================================= */
+$stmt = $conn->prepare("
+    UPDATE borrow_transactions
+    SET status = 'return_requested'
+    WHERE user_id = ?
+      AND item_id = ?
+      AND borrow_date = ?
+      AND status IN ('borrowed', 'return_rejected')
+");
+$stmt->bind_param("iis", $user_id, $item_id, $borrow_date);
+$stmt->execute();
+$stmt->close();
+
+/* =========================================================
+   STEP 3: ACTIVITY LOG (OPTIONAL BUT GOOD)
+========================================================= */
+$action = "User requested return (Item ID: $item_id, Borrowed at: $borrow_date)";
+$log = $conn->prepare("
+    INSERT INTO activity_logs (user_id, action)
+    VALUES (?, ?)
+");
+$log->bind_param("is", $user_id, $action);
+$log->execute();
+$log->close();
+
+/* ===== REDIRECT BACK ===== */
+header("Location: list.php?requested=1");
+exit;

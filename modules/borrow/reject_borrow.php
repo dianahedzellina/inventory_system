@@ -1,0 +1,204 @@
+<?php
+session_start();
+
+/* ===== LOGIN + ADMIN CHECK ===== */
+if (!isset($_SESSION['user_id'])) {
+    header("Location: ../../auth/login.php");
+    exit;
+}
+
+if (($_SESSION['role'] ?? '') !== 'admin') {
+    header("Location: ../../index.php");
+    exit;
+}
+
+include '../../database.php';
+
+/* ===== SHOW BACK BUTTON ===== */
+$showBackButton = true;
+
+/* ===== GET BORROW ID ===== */
+$borrow_id = isset($_GET['id']) ? (int) $_GET['id'] : 0;
+if ($borrow_id <= 0) {
+    header("Location: borrow_requests.php");
+    exit;
+}
+
+$error = '';
+
+/* =========================================================
+   STEP A: HANDLE POST (SAVE REJECTION)
+========================================================= */
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+
+    $reject_reason = trim($_POST['reject_reason'] ?? '');
+
+    if ($reject_reason === '') {
+        $error = "Rejection reason is required.";
+    } else {
+
+        $admin_id = (int) $_SESSION['user_id'];
+
+        /* ===== GET REQUESTER NAME (FOR LOG) ===== */
+        $stmt = $conn->prepare("
+            SELECT u.username
+            FROM borrow_transactions bt
+            JOIN users u ON u.user_id = bt.user_id
+            WHERE bt.borrow_id = ?
+            LIMIT 1
+        ");
+        $stmt->bind_param("i", $borrow_id);
+        $stmt->execute();
+        $stmt->bind_result($requester);
+        $stmt->fetch();
+        $stmt->close();
+
+        if (!$requester) {
+            header("Location: borrow_requests.php");
+            exit;
+        }
+
+        /* ===== UPDATE BORROW STATUS ===== */
+        $sql = "
+            UPDATE borrow_transactions
+            SET status = 'rejected',
+                reject_reason = ?,
+                rejected_by = ?,
+                rejected_at = NOW()
+            WHERE borrow_id = ?
+              AND status = 'pending'
+        ";
+
+        $stmt = $conn->prepare($sql);
+
+        if (!$stmt) {
+            die(
+                "<strong>SQL Prepare Failed</strong><br>" .
+                htmlspecialchars($conn->error)
+            );
+        }
+
+        $stmt->bind_param("sii", $reject_reason, $admin_id, $borrow_id);
+        $stmt->execute();
+        $stmt->close();
+
+        /* ===== ACTIVITY LOG (UPDATED) ===== */
+        $action = "Rejected borrow request (Requester: {$requester})";
+
+        $stmt = $conn->prepare("
+            INSERT INTO activity_logs (user_id, action)
+            VALUES (?, ?)
+        ");
+        $stmt->bind_param("is", $admin_id, $action);
+        $stmt->execute();
+        $stmt->close();
+
+        header("Location: borrow_requests.php?rejected=1");
+        exit;
+    }
+}
+
+/* =========================================================
+   STEP B: FETCH BORROW DETAILS
+========================================================= */
+$sql = "
+    SELECT 
+        bt.borrow_id,
+        bt.quantity AS borrow_qty,
+        bt.request_reason,
+        u.username AS requester_name,
+        i.item_name
+    FROM borrow_transactions bt
+    JOIN users u ON u.user_id = bt.user_id
+    JOIN items i ON i.item_id = bt.item_id
+    WHERE bt.borrow_id = ?
+      AND bt.status = 'pending'
+    LIMIT 1
+";
+
+$stmt = $conn->prepare($sql);
+
+if (!$stmt) {
+    die(
+        "<strong>SQL Prepare Failed</strong><br>" .
+        htmlspecialchars($conn->error)
+    );
+}
+
+$stmt->bind_param("i", $borrow_id);
+$stmt->execute();
+$result = $stmt->get_result();
+$borrowRow = $result->fetch_assoc();
+$stmt->close();
+
+if (!$borrowRow) {
+    header("Location: borrow_requests.php");
+    exit;
+}
+
+/* ===== LAYOUT TOP ===== */
+include '../../partials/layout_top.php';
+?>
+
+<!-- ================= PAGE HEADER ================= -->
+<section class="content-header">
+  <h1 class="mb-2">Reject Borrow Request</h1>
+  <p class="text-muted mb-0">
+    Please provide a reason for rejecting this borrow request.
+  </p>
+</section>
+
+<!-- ================= PAGE CONTENT ================= -->
+<section class="content">
+
+  <div class="card">
+    <div class="card-body" style="max-width: 700px;">
+
+      <div class="mb-3">
+        <p><strong>User:</strong> <?= htmlspecialchars($borrowRow['requester_name']) ?></p>
+        <p><strong>Item:</strong> <?= htmlspecialchars($borrowRow['item_name']) ?></p>
+        <p><strong>Quantity:</strong> <?= (int)$borrowRow['borrow_qty'] ?></p>
+      </div>
+
+      <?php if (!empty($borrowRow['request_reason'])): ?>
+        <div class="alert alert-info">
+          <strong>Staff Request Reason:</strong><br>
+          <?= nl2br(htmlspecialchars($borrowRow['request_reason'])) ?>
+        </div>
+      <?php endif; ?>
+
+      <?php if ($error): ?>
+        <div class="alert alert-danger">
+          <?= htmlspecialchars($error) ?>
+        </div>
+      <?php endif; ?>
+
+      <form method="POST">
+        <div class="form-group">
+          <label for="reject_reason"><strong>Admin Rejection Reason</strong></label>
+          <textarea
+            name="reject_reason"
+            id="reject_reason"
+            class="form-control"
+            rows="4"
+            required
+            placeholder="Example: Item under maintenance / insufficient stock"
+          ><?= htmlspecialchars($_POST['reject_reason'] ?? '') ?></textarea>
+        </div>
+
+        <div class="mt-3">
+          <button type="submit" class="btn btn-danger">
+            <i class="fas fa-times"></i> Reject Request
+          </button>
+          <a href="borrow_requests.php" class="btn btn-secondary ml-2">
+            Cancel
+          </a>
+        </div>
+      </form>
+
+    </div>
+  </div>
+
+</section>
+
+<?php include '../../partials/layout_bottom.php'; ?>

@@ -1,0 +1,97 @@
+<?php
+session_start();
+if (!isset($_SESSION['user_id'])) {
+    header("Location: ../../auth/login.php");
+    exit;
+}
+
+include '../../database.php';
+
+$result = mysqli_query($conn, "SELECT * FROM categories ORDER BY created_at DESC");
+?>
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Category List</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <link rel="stylesheet" href="../../admin/plugins/fontawesome-free/css/all.min.css">
+  <link rel="stylesheet" href="../../admin/dist/css/adminlte.min.css">
+</head>
+
+<body class="hold-transition sidebar-mini">
+<div class="wrapper">
+
+  <div class="content-wrapper p-4">
+    <section class="content-header d-flex justify-content-between align-items-center">
+      <h1>Categories</h1>
+      <a href="add.php" class="btn btn-primary">
+        <i class="fas fa-plus"></i> Add Category
+      </a>
+    </section>
+
+    <section class="content">
+		<?php if (isset($_GET['error']) && $_GET['error'] === 'used'): ?>
+	  <div class="alert alert-warning">
+		Cannot delete category — it is used by existing items.
+	  </div>
+	<?php endif; ?>
+
+
+      <div class="card">
+        <div class="card-body table-responsive">
+
+          <table class="table table-bordered table-striped">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Category Name</th>
+                <th>Created</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+
+              <?php if (mysqli_num_rows($result) > 0): ?>
+                <?php while ($row = mysqli_fetch_assoc($result)): ?>
+                  <tr>
+                    <td><?= $row['category_id'] ?></td>
+                    <td><?= htmlspecialchars($row['category_name']) ?></td>
+                    <td><?= $row['created_at'] ?></td>
+                    <td>
+                      <a href="edit.php?id=<?= $row['category_id'] ?>" class="btn btn-sm btn-warning">
+                        <i class="fas fa-edit"></i> Edit
+                      </a>
+
+                      <a href="delete.php?id=<?= $row['category_id'] ?>"
+                         class="btn btn-sm btn-danger"
+                         onclick="return confirm('Delete this category?');">
+                        <i class="fas fa-trash"></i> Delete
+                      </a>
+                    </td>
+                  </tr>
+                <?php endwhile; ?>
+              <?php else: ?>
+                <tr>
+                  <td colspan="4" class="text-center">No categories found</td>
+                </tr>
+              <?php endif; ?>
+
+            </tbody>
+          </table>
+
+        </div>
+      </div>
+
+    </section>
+  </div>
+
+</div>
+
+<script src="../../admin/plugins/jquery/jquery.min.js"></script>
+<script src="../../admin/plugins/bootstrap/js/bootstrap.bundle.min.js"></script>
+<script src="../../admin/dist/js/adminlte.min.js"></script>
+</body>
+</html>

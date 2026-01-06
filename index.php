@@ -1,0 +1,482 @@
+<?php
+session_start();
+
+/* ===== LOGIN CHECK ===== */
+if (!isset($_SESSION['user_id'])) {
+    header("Location: auth/login.php");
+    exit;
+}
+
+include 'database.php';
+
+/* ===== SAFE HELPERS ===== */
+function fetch_one_assoc(mysqli $conn, string $sql): array {
+    $res = mysqli_query($conn, $sql);
+    if (!$res) return [];
+    $row = mysqli_fetch_assoc($res);
+    return $row ?: [];
+}
+function fetch_all_assoc(mysqli $conn, string $sql): array {
+    $res = mysqli_query($conn, $sql);
+    if (!$res) return [];
+    $rows = [];
+    while ($r = mysqli_fetch_assoc($res)) $rows[] = $r;
+    return $rows;
+}
+
+/* ===== DASHBOARD STATS ===== */
+$total_items = (int) (fetch_one_assoc($conn, "SELECT COUNT(*) AS total FROM items")['total'] ?? 0);
+
+$total_quantity = (int) (fetch_one_assoc($conn, "SELECT COALESCE(SUM(quantity),0) AS total FROM items")['total'] ?? 0);
+
+/* NOTE: Your current code counts rows in borrow_transactions with status='borrowed' */
+$total_borrowed = (int) (fetch_one_assoc($conn, "
+    SELECT COUNT(*) AS total
+    FROM borrow_transactions
+    WHERE status = 'borrowed'
+      AND user_id = " . (int)$_SESSION['user_id'] . "
+")['total'] ?? 0);
+
+
+/* 🔒 LOW STOCK (ADMIN ONLY) */
+$low_stock = 0;
+if (($_SESSION['role'] ?? 'staff') === 'admin') {
+    $low_stock = (int) (fetch_one_assoc($conn, "
+        SELECT COUNT(*) AS total
+        FROM items
+        WHERE quantity <= 2
+    ")['total'] ?? 0);
+}
+
+/* ===== AUTO WARNING: LOW STOCK SPIKE (SESSION BASED, NO NEW TABLE) =====
+   If low-stock count increased since last dashboard view, show warning.
+*/
+$lowStockSpikeMsg = '';
+if (($_SESSION['role'] ?? 'staff') === 'admin') {
+    $prev = (int) ($_SESSION['last_low_stock_count'] ?? -1);
+    if ($prev >= 0) {
+        $diff = $low_stock - $prev;
+        if ($diff >= 2) { // spike threshold (change if you want)
+            $lowStockSpikeMsg = "⚠️ Low stock items increased by {$diff} since your last visit.";
+        }
+    }
+    $_SESSION['last_low_stock_count'] = $low_stock;
+}
+
+/* ===== GRAPH #1: BORROW TREND (LAST 30 DAYS) =====
+   Uses borrow_transactions.borrow_date (DATE/DATETIME).
+*/
+$trend_rows = fetch_all_assoc($conn, "
+    SELECT DATE(borrow_date) AS d, COUNT(*) AS c
+    FROM borrow_transactions
+    WHERE borrow_date >= (CURDATE() - INTERVAL 29 DAY)
+    GROUP BY DATE(borrow_date)
+    ORDER BY d ASC
+");
+
+$trend_map = [];
+foreach ($trend_rows as $r) {
+    $trend_map[$r['d']] = (int)$r['c'];
+}
+
+/* Build complete 30-day timeline */
+$trend_labels = [];
+$trend_values = [];
+$start = new DateTime('today -29 days');
+for ($i=0; $i<30; $i++) {
+    $date = clone $start;
+    $date->modify("+{$i} days");
+    $d = $date->format('Y-m-d');
+    $trend_labels[] = $d;
+    $trend_values[] = $trend_map[$d] ?? 0;
+}
+
+/* ===== GRAPH #2: ITEM CATEGORY CHART (Laptop / Printer / Mobile / Other) =====
+   Tries to classify via items.category OR items.item_name if category is NULL/empty.
+   If you already have a clean 'category' column, it will work great.
+*/
+$cat_rows = fetch_all_assoc($conn, "
+    SELECT
+      CASE
+        WHEN LOWER(COALESCE(NULLIF(category,''), item_name)) LIKE '%laptop%'  THEN 'Laptop'
+        WHEN LOWER(COALESCE(NULLIF(category,''), item_name)) LIKE '%notebook%' THEN 'Laptop'
+        WHEN LOWER(COALESCE(NULLIF(category,''), item_name)) LIKE '%printer%' THEN 'Printer'
+        WHEN LOWER(COALESCE(NULLIF(category,''), item_name)) LIKE '%mobile%'  THEN 'Mobile'
+        WHEN LOWER(COALESCE(NULLIF(category,''), item_name)) LIKE '%phone%'   THEN 'Mobile'
+        ELSE 'Other'
+      END AS cat,
+      COUNT(*) AS total
+    FROM items
+    GROUP BY cat
+    ORDER BY total DESC
+");
+
+$cat_labels = [];
+$cat_values = [];
+foreach ($cat_rows as $r) {
+    $cat_labels[] = $r['cat'];
+    $cat_values[] = (int)$r['total'];
+}
+
+/* ===== GRAPH #3: BORROW BY DEPARTMENT =====
+   Uses users.department (or staff dept). If department is NULL/empty -> "Unknown".
+   Shows last 30 days borrow requests (all statuses), because it's most useful as activity.
+*/
+$dept_rows = fetch_all_assoc($conn, "
+    SELECT
+      COALESCE(NULLIF(u.department,''), 'Unknown') AS dept,
+      COUNT(*) AS total
+    FROM borrow_transactions b
+    JOIN users u ON u.user_id = b.user_id
+    WHERE b.borrow_date >= (CURDATE() - INTERVAL 29 DAY)
+    GROUP BY dept
+    ORDER BY total DESC
+");
+
+$dept_labels = [];
+$dept_values = [];
+foreach ($dept_rows as $r) {
+    $dept_labels[] = $r['dept'];
+    $dept_values[] = (int)$r['total'];
+}
+
+/* ===== ADMIN REQUEST COUNTS ===== */
+$pending_borrow_requests = 0;
+$pending_return_requests = 0;
+$pending_user_requests   = 0;
+
+if (($_SESSION['role'] ?? 'staff') === 'admin') {
+
+    $pending_borrow_requests = (int) (fetch_one_assoc($conn, "
+        SELECT COUNT(*) AS total
+        FROM borrow_transactions
+        WHERE status = 'pending'
+    ")['total'] ?? 0);
+
+    $pending_return_requests = (int) (fetch_one_assoc($conn, "
+        SELECT COUNT(*) AS total
+        FROM borrow_transactions
+        WHERE status = 'return_requested'
+    ")['total'] ?? 0);
+
+    $pending_user_requests = (int) (fetch_one_assoc($conn, "
+        SELECT COUNT(*) AS total
+        FROM users
+        WHERE status = 'pending'
+    ")['total'] ?? 0);
+}
+
+/* ===== LAYOUT ===== */
+$showBackButton = false;
+include 'partials/layout_top.php';
+
+/* ===== GRID SIZE BASED ON ROLE ===== */
+$boxClass = (($_SESSION['role'] ?? 'staff') === 'admin')
+    ? 'col-lg-3 col-md-6 col-12'
+    : 'col-lg-4 col-md-6 col-12';
+?>
+
+<!-- ================= PAGE HEADER ================= -->
+<section class="content-header">
+  <h1 class="mb-1">Inventory Dashboard</h1>
+  <p class="text-muted mb-0">
+    Welcome back,
+    <strong><?= htmlspecialchars($_SESSION['username'] ?? 'User') ?></strong>
+  </p>
+</section>
+
+<section class="content">
+
+  <!-- ===== LOW STOCK SPIKE WARNING (ADMIN ONLY) ===== -->
+  <?php if (($_SESSION['role'] ?? 'staff') === 'admin' && $lowStockSpikeMsg !== ''): ?>
+    <div class="alert alert-warning">
+      <i class="fas fa-exclamation-triangle mr-1"></i>
+      <?= htmlspecialchars($lowStockSpikeMsg) ?>
+    </div>
+  <?php endif; ?>
+
+  <!-- ================= ADMIN ACTION BOXES ================= -->
+  <?php if (($_SESSION['role'] ?? 'staff') === 'admin'): ?>
+    <div class="row mb-4">
+
+      <div class="col-lg-4 col-12">
+        <div class="info-box bg-orange">
+          <span class="info-box-icon"><i class="fas fa-inbox"></i></span>
+          <div class="info-box-content">
+            <span class="info-box-text">Borrow Requests Pending</span>
+            <span class="info-box-number"><?= (int)$pending_borrow_requests ?></span>
+            <a href="modules/borrow/borrow_requests.php" class="text-sm d-block mt-1">
+              Open Borrow Requests
+            </a>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-lg-4 col-12">
+        <div class="info-box bg-maroon">
+          <span class="info-box-icon"><i class="fas fa-undo"></i></span>
+          <div class="info-box-content">
+            <span class="info-box-text">Return Requests Pending</span>
+            <span class="info-box-number"><?= (int)$pending_return_requests ?></span>
+            <a href="modules/borrow/return_requests.php" class="text-sm d-block mt-1">
+              Open Return Requests
+            </a>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-lg-4 col-12">
+        <div class="info-box bg-navy">
+          <span class="info-box-icon"><i class="fas fa-user-clock"></i></span>
+          <div class="info-box-content">
+            <span class="info-box-text">User Requests Pending</span>
+            <span class="info-box-number"><?= (int)$pending_user_requests ?></span>
+            <a href="modules/users/list.php" class="text-sm d-block mt-1">
+              Open User Requests
+            </a>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  <?php endif; ?>
+
+  <!-- ================= DASHBOARD STAT BOXES ================= -->
+  <div class="row">
+
+    <div class="<?= $boxClass ?>">
+      <div class="small-box bg-success">
+        <div class="inner">
+          <h3><?= (int)$total_quantity ?></h3>
+          <p>Total Stock Quantity</p>
+        </div>
+        <div class="icon"><i class="fas fa-layer-group"></i></div>
+        <?php if (($_SESSION['role'] ?? 'staff') === 'admin'): ?>
+          <a href="modules/items/list.php" class="small-box-footer">
+            View Stock <i class="fas fa-arrow-circle-right"></i>
+          </a>
+        <?php endif; ?>
+      </div>
+    </div>
+
+    <div class="<?= $boxClass ?>">
+      <div class="small-box bg-info">
+        <div class="inner">
+          <h3><?= (int)$total_items ?></h3>
+          <p>Total Items</p>
+        </div>
+        <div class="icon"><i class="fas fa-box"></i></div>
+        <?php if (($_SESSION['role'] ?? 'staff') === 'admin'): ?>
+          <a href="modules/items/list.php" class="small-box-footer">
+            View Items <i class="fas fa-arrow-circle-right"></i>
+          </a>
+        <?php endif; ?>
+      </div>
+    </div>
+
+    <div class="<?= $boxClass ?>">
+      <div class="small-box bg-warning">
+        <div class="inner">
+          <h3><?= (int)$total_borrowed ?></h3>
+          <p>Items Borrowed</p>
+        </div>
+        <div class="icon"><i class="fas fa-hand-holding"></i></div>
+        <a href="modules/borrow/list.php" class="small-box-footer">
+          View Borrowed <i class="fas fa-arrow-circle-right"></i>
+        </a>
+      </div>
+    </div>
+
+    <?php if (($_SESSION['role'] ?? 'staff') === 'admin'): ?>
+      <div class="<?= $boxClass ?>">
+        <div class="small-box bg-danger">
+          <div class="inner">
+            <h3><?= (int)$low_stock ?></h3>
+            <p>Low Stock Items</p>
+          </div>
+          <div class="icon"><i class="fas fa-exclamation-triangle"></i></div>
+          <a href="modules/items/list.php" class="small-box-footer">
+            Check Stock <i class="fas fa-arrow-circle-right"></i>
+          </a>
+        </div>
+      </div>
+    <?php endif; ?>
+
+  </div>
+
+  <!-- ================= CHARTS ROW 1 ================= -->
+  <div class="row mt-4">
+
+    <!-- Borrow trend -->
+    <div class="col-lg-8 col-12">
+      <div class="card">
+        <div class="card-header">
+          <h3 class="card-title">
+            <i class="fas fa-chart-line mr-1"></i>
+            Borrow Trend (Last 30 Days)
+          </h3>
+        </div>
+        <div class="card-body">
+          <div style="height:320px;">
+            <canvas id="borrowTrendChart"></canvas>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Category pie -->
+    <div class="col-lg-4 col-12">
+      <div class="card">
+        <div class="card-header">
+          <h3 class="card-title">
+            <i class="fas fa-chart-pie mr-1"></i>
+            Item Categories
+          </h3>
+        </div>
+        <div class="card-body">
+          <div style="height:320px;">
+            <canvas id="categoryChart"></canvas>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ================= CHARTS ROW 2 ================= -->
+  <div class="row">
+
+    <!-- Borrow by department -->
+    <div class="col-12">
+      <div class="card">
+        <div class="card-header">
+          <h3 class="card-title">
+            <i class="fas fa-building mr-1"></i>
+            Borrow by Department (Last 30 Days)
+          </h3>
+        </div>
+        <div class="card-body">
+          <div style="height:340px;">
+            <canvas id="deptChart"></canvas>
+          </div>
+          <p class="text-muted text-sm mb-0">
+            Note: Department uses <code>users.department</code>. If empty, it appears as <em>Unknown</em>.
+          </p>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+</section>
+
+<?php include 'partials/layout_bottom.php'; ?>
+
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+
+  // ---------- Dark-mode chart tuning ----------
+  const isDark = document.body.classList.contains('dark-mode');
+  const textColor  = isDark ? '#e6e6e6' : '#343a40';
+  const gridColor  = isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)';
+
+  function axisStyle() {
+    return {
+      ticks: { color: textColor, precision: 0 },
+      grid:  { color: gridColor }
+    };
+  }
+
+  // ---------- Data from PHP ----------
+  const trendLabels = <?= json_encode($trend_labels) ?>;
+  const trendValues = <?= json_encode($trend_values) ?>;
+
+  const catLabels = <?= json_encode($cat_labels) ?>;
+  const catValues = <?= json_encode($cat_values) ?>;
+
+  const deptLabels = <?= json_encode($dept_labels) ?>;
+  const deptValues = <?= json_encode($dept_values) ?>;
+
+  // ---------- Chart 1: Borrow trend (line) ----------
+  const trendCanvas = document.getElementById('borrowTrendChart');
+  if (trendCanvas) {
+    new Chart(trendCanvas.getContext('2d'), {
+      type: 'line',
+      data: {
+        labels: trendLabels,
+        datasets: [{
+          label: 'Borrows',
+          data: trendValues,
+          tension: 0.25,
+          borderWidth: 2,
+          pointRadius: 2,
+          fill: true
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { labels: { color: textColor } },
+          tooltip: { mode: 'index', intersect: false }
+        },
+        interaction: { mode: 'index', intersect: false },
+        scales: {
+          x: axisStyle(),
+          y: { ...axisStyle(), beginAtZero: true }
+        }
+      }
+    });
+  }
+
+  // ---------- Chart 2: Category (pie) ----------
+  const catCanvas = document.getElementById('categoryChart');
+  if (catCanvas) {
+    new Chart(catCanvas.getContext('2d'), {
+      type: 'pie',
+      data: {
+        labels: catLabels,
+        datasets: [{
+          data: catValues,
+          borderWidth: 1
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { position: 'bottom', labels: { color: textColor } }
+        }
+      }
+    });
+  }
+
+  // ---------- Chart 3: Borrow by department (bar) ----------
+  const deptCanvas = document.getElementById('deptChart');
+  if (deptCanvas) {
+    new Chart(deptCanvas.getContext('2d'), {
+      type: 'bar',
+      data: {
+        labels: deptLabels,
+        datasets: [{
+          label: 'Borrows',
+          data: deptValues,
+          borderWidth: 1
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { labels: { color: textColor } }
+        },
+        scales: {
+          x: axisStyle(),
+          y: { ...axisStyle(), beginAtZero: true }
+        }
+      }
+    });
+  }
+
+});
+</script>

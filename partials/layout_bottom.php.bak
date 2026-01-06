@@ -1,0 +1,21 @@
+  </div> <!-- /.content-wrapper -->
+
+  <footer class="main-footer text-sm">
+    <strong>Inventory System</strong>
+    <div class="float-right d-none d-sm-inline">
+      v1.0
+    </div>
+  </footer>
+
+</div> <!-- ./wrapper -->
+
+<!-- REQUIRED SCRIPTS -->
+<script src="/inventory_system/admin/plugins/jquery/jquery.min.js"></script>
+<script src="/inventory_system/admin/plugins/bootstrap/js/bootstrap.bundle.min.js"></script>
+<script src="/inventory_system/admin/dist/js/adminlte.min.js"></script>
+
+<!-- Chart.js (required for dashboard graphs) -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+</body>
+</html>

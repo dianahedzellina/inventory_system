@@ -1,0 +1,99 @@
+<?php
+// layout_top.php
+// REQUIRE: session_start() already called before include
+
+$username = $_SESSION['username'] ?? 'User';
+$role     = $_SESSION['role'] ?? 'staff';
+
+/* ===== THEME HANDLING ===== */
+$theme = $_SESSION['theme'] ?? 'light';
+$isDark = ($theme === 'dark');
+
+/*
+ AdminLTE navbar classes:
+ - Light mode  → navbar-white navbar-light
+ - Dark mode   → navbar-dark navbar-dark-mode
+*/
+$navbarClass = $isDark
+    ? 'navbar-dark navbar-dark-mode'
+    : 'navbar-white navbar-light';
+
+/* ===== TIME-BASED GREETING ===== */
+$hour = (int) date('H');
+if ($hour < 12) {
+    $greeting = 'Good morning';
+} elseif ($hour < 18) {
+    $greeting = 'Good afternoon';
+} else {
+    $greeting = 'Good evening';
+}
+?>
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Inventory System</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <!-- AdminLTE CSS -->
+  <link rel="stylesheet" href="/inventory_system/admin/plugins/fontawesome-free/css/all.min.css">
+  <link rel="stylesheet" href="/inventory_system/admin/dist/css/adminlte.min.css">
+</head>
+
+<body class="hold-transition sidebar-mini <?= $isDark ? 'dark-mode' : '' ?>">
+<div class="wrapper">
+
+  <!-- ================= NAVBAR ================= -->
+  <nav class="main-header navbar navbar-expand <?= $navbarClass ?>">
+
+    <!-- LEFT: SIDEBAR TOGGLE -->
+    <ul class="navbar-nav">
+      <li class="nav-item">
+        <a class="nav-link" data-widget="pushmenu" href="#" role="button">
+          <i class="fas fa-bars"></i>
+        </a>
+      </li>
+    </ul>
+
+    <!-- RIGHT -->
+    <ul class="navbar-nav ml-auto align-items-center">
+
+      <!-- Greeting -->
+      <li class="nav-item mr-3 d-none d-sm-block">
+        <span class="<?= $isDark ? 'text-light' : 'text-muted' ?>">
+          <?= $greeting ?>,
+          <strong><?= htmlspecialchars($username) ?></strong>
+          <span class="badge badge-secondary ml-2">
+            <?= ucfirst(htmlspecialchars($role)) ?>
+          </span>
+        </span>
+      </li>
+
+      <!-- DARK MODE TOGGLE -->
+      <li class="nav-item">
+        <a href="/inventory_system/toggle_theme.php"
+           class="nav-link"
+           title="Toggle Dark Mode">
+          <i class="fas <?= $isDark ? 'fa-sun' : 'fa-moon' ?>"></i>
+        </a>
+      </li>
+
+      <!-- LOGOUT ICON -->
+      <li class="nav-item">
+        <a href="/inventory_system/auth/logout.php"
+           class="nav-link text-danger"
+           title="Logout">
+          <i class="fas fa-sign-out-alt"></i>
+        </a>
+      </li>
+
+    </ul>
+  </nav>
+  <!-- ================= END NAVBAR ================= -->
+
+  <!-- ================= SIDEBAR ================= -->
+  <?php include __DIR__ . '/sidebar.php'; ?>
+
+  <!-- ================= CONTENT ================= -->
+  <div class="content-wrapper p-4">

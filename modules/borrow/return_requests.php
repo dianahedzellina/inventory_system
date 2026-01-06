@@ -1,0 +1,210 @@
+<?php
+session_start();
+
+/* ===== ADMIN CHECK ===== */
+if (!isset($_SESSION['user_id'])) {
+    header("Location: ../../auth/login.php");
+    exit;
+}
+
+if (($_SESSION['role'] ?? '') !== 'admin') {
+    header("Location: ../../index.php");
+    exit;
+}
+
+include '../../database.php';
+
+/* =====================================================
+   HANDLE APPROVE / REJECT (FIXED: RESTORE INVENTORY)
+===================================================== */
+if (isset($_GET['action'], $_GET['id']) && ctype_digit($_GET['id'])) {
+
+    $borrow_id = (int) $_GET['id'];
+    $action    = $_GET['action'];
+
+    if ($action === 'approve') {
+
+        /* ===== FETCH ITEM & QTY ===== */
+        $stmt = $conn->prepare("
+            SELECT item_id, quantity
+            FROM borrow_transactions
+            WHERE borrow_id = ?
+              AND status = 'return_requested'
+            LIMIT 1
+        ");
+        $stmt->bind_param("i", $borrow_id);
+        $stmt->execute();
+        $borrow = $stmt->get_result()->fetch_assoc();
+        $stmt->close();
+
+        if ($borrow) {
+
+            /* ===== UPDATE BORROW STATUS ===== */
+            $stmt = $conn->prepare("
+                UPDATE borrow_transactions
+                SET status = 'returned',
+                    return_date = NOW()
+                WHERE borrow_id = ?
+                  AND status = 'return_requested'
+                LIMIT 1
+            ");
+            $stmt->bind_param("i", $borrow_id);
+            $stmt->execute();
+            $stmt->close();
+
+            /* ===== RESTORE INVENTORY STOCK (FIX) ===== */
+            $stmt = $conn->prepare("
+                UPDATE items
+                SET quantity = quantity + ?
+                WHERE item_id = ?
+                LIMIT 1
+            ");
+            $stmt->bind_param("ii", $borrow['quantity'], $borrow['item_id']);
+            $stmt->execute();
+            $stmt->close();
+        }
+
+    } elseif ($action === 'reject') {
+
+        $stmt = $conn->prepare("
+            UPDATE borrow_transactions
+            SET status = 'borrowed'
+            WHERE borrow_id = ?
+              AND status = 'return_requested'
+            LIMIT 1
+        ");
+        $stmt->bind_param("i", $borrow_id);
+        $stmt->execute();
+        $stmt->close();
+    }
+
+    header("Location: return_requests.php");
+    exit;
+}
+
+/* ===== SHOW BACK BUTTON ===== */
+$showBackButton = true;
+
+/* ===== LAYOUT ===== */
+include '../../partials/layout_top.php';
+
+/* =====================================================
+   FETCH RETURN REQUESTS (WITH HANDOVER USER)
+===================================================== */
+$stmt = $conn->prepare("
+    SELECT 
+        b.borrow_id,
+        b.quantity,
+        b.borrow_date,
+        b.request_reason,
+        b.handover_to,
+        i.item_name,
+        i.model,
+        i.serial_number,
+        u.username,
+        u.department,
+        hu.username AS handover_name
+    FROM borrow_transactions b
+    JOIN items i ON b.item_id = i.item_id
+    JOIN users u ON b.user_id = u.user_id
+    LEFT JOIN users hu ON b.handover_to = hu.user_id
+    WHERE b.status = 'return_requested'
+    ORDER BY b.borrow_date ASC
+");
+$stmt->execute();
+$result = $stmt->get_result();
+?>
+
+<section class="content-header">
+  <h1 class="mb-2">Return Requests</h1>
+  <p class="text-muted mb-0">Review and approve or reject item return requests from staff.</p>
+</section>
+
+<section class="content">
+
+<div class="card">
+<div class="card-body table-responsive">
+
+<table class="table table-bordered table-striped">
+<thead>
+<tr>
+  <th>#</th>
+  <th>Requester</th>
+  <th>Department</th>
+  <th>Item</th>
+  <th>Model</th>
+  <th>Serial No.</th>
+  <th>Qty</th>
+  <th>Borrow Date</th>
+  <th>Return Reason</th>
+  <th>Handover To</th>
+  <th style="width:180px;">Action</th>
+</tr>
+</thead>
+
+<tbody>
+<?php if ($result->num_rows > 0): ?>
+<?php $no=1; while ($row=$result->fetch_assoc()): ?>
+<tr>
+
+<td><?= $no++ ?></td>
+<td><strong><?= htmlspecialchars($row['username']) ?></strong></td>
+
+<td>
+<?= $row['department']
+  ? '<span class="badge badge-info">'.htmlspecialchars($row['department']).'</span>'
+  : '<span class="text-muted">Not Set</span>' ?>
+</td>
+
+<td><?= htmlspecialchars($row['item_name']) ?></td>
+<td><?= $row['model'] ?: '—' ?></td>
+<td><?= $row['serial_number'] ?: '—' ?></td>
+<td><?= (int)$row['quantity'] ?></td>
+<td><?= date('d M Y', strtotime($row['borrow_date'])) ?></td>
+
+<td>
+<?= $row['request_reason']
+  ? nl2br(htmlspecialchars($row['request_reason']))
+  : '<span class="text-muted">No reason provided</span>' ?>
+</td>
+
+<td>
+<?= $row['handover_name']
+  ? htmlspecialchars($row['handover_name'])
+  : '<span class="text-muted">—</span>' ?>
+</td>
+
+<td>
+<a href="return_requests.php?action=approve&id=<?= $row['borrow_id'] ?>"
+   class="btn btn-sm btn-success mb-1"
+   onclick="return confirm('Approve return for this item?');">
+<i class="fas fa-check"></i> Approve
+</a>
+
+<a href="return_requests.php?action=reject&id=<?= $row['borrow_id'] ?>"
+   class="btn btn-sm btn-danger"
+   onclick="return confirm('Reject this return request?');">
+<i class="fas fa-times"></i> Reject
+</a>
+</td>
+
+</tr>
+<?php endwhile; else: ?>
+<tr>
+<td colspan="11" class="text-center text-muted">
+No return requests pending
+</td>
+</tr>
+<?php endif; ?>
+</tbody>
+
+</table>
+</div>
+</div>
+
+</section>
+
+<?php
+$stmt->close();
+include '../../partials/layout_bottom.php';
+?>

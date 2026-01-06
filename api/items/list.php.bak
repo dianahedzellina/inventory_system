@@ -1,0 +1,22 @@
+<?php
+header("Content-Type: application/json");
+include '../../database.php';
+
+$result = $conn->query("
+    SELECT item_id, item_name, category, quantity
+    FROM items
+    ORDER BY item_name
+");
+
+$items = [];
+while ($row = $result->fetch_assoc()) {
+    $items[] = [
+        "id"       => $row['item_id'],
+        "name"     => $row['item_name'],
+        "category" => $row['category'],
+        "quantity" => (int)$row['quantity'],
+        "status"   => $row['quantity'] > 0 ? "available" : "unavailable"
+    ];
+}
+
+echo json_encode($items);
